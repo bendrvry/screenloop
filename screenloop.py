@@ -26,6 +26,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import dashboard
+
 log = logging.getLogger("screenloop")
 
 CONFIG_PATH = Path(os.environ.get(
@@ -42,6 +44,11 @@ DEFAULTS = {
     "display": {"output": "auto", "resolution": "auto", "monitor_off_seconds": "5"},
     "monitor": {"input_command": ""},
     "web": {"port": "8080"},
+    # The optional dashboard: off unless both times are set.
+    "dashboard": {"start": "", "end": "", "place": "London", "latitude": "51.5074",
+                  "longitude": "-0.1278", "temperature_unit": "celsius", "wind_unit": "mph",
+                  "news_feeds": "", "news_title": "Headlines", "effects": "full",
+                  "browser": "auto", "browser_args": ""},
 }
 
 
@@ -351,6 +358,62 @@ class Player:
         self.proc = None
 
 
+class DashboardPlayer:
+    """The dashboard: a full-screen browser showing the page this program serves."""
+
+    def __init__(self, settings, port):
+        self.settings = settings
+        self.url = f"http://localhost:{port}/dashboard"
+        self.proc = None
+        self.last_start = 0.0
+        self.missing = False
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def browser(self):
+        name = self.settings["browser"].strip()
+        names = ["chromium", "chromium-browser"] if name in ("", "auto") else [name]
+        return next((path for n in names if (path := shutil.which(n))), None)
+
+    def start(self):
+        if self.running():
+            return
+        if time.monotonic() - self.last_start < 15:  # don't spin if the browser keeps crashing
+            return
+        self.last_start = time.monotonic()
+        browser = self.browser()
+        if browser is None:
+            if not self.missing:
+                log.error("no Chromium browser found; the dashboard can't be shown")
+            self.missing = True
+            return
+        self.missing = False
+        profile = Path.home() / ".cache/screenloop/browser"
+        cmd = [browser, "--kiosk", f"--app={self.url}", "--ozone-platform=wayland",
+               f"--user-data-dir={profile}", "--no-first-run", "--noerrdialogs",
+               "--disable-infobars", "--disable-session-crashed-bubble", "--hide-scrollbars",
+               "--password-store=basic", "--disable-features=Translate",
+               *shlex.split(self.settings["browser_args"])]
+        log.info("starting the dashboard browser")
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+    def stop(self):
+        if self.running():
+            log.info("stopping the dashboard browser")
+            # Chromium runs as several processes; stop the whole group.
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+                self.proc.wait()
+            except OSError:
+                pass
+        self.proc = None
+
+
 def network_up():
     """True if the Pi can reach its router, so a silent computer really means it's asleep."""
     r = run(["ip", "-4", "route", "show", "default"])
@@ -448,6 +511,14 @@ class Controller:
         self.disconnected_since = None  # when the Pi's HDMI port lost the monitor
         self.connected = None
         self.player = Player(self.video, self.duration, cfg["video"])
+        # The optional dashboard replaces the video between these times.
+        d = cfg["dashboard"]
+        self.dash_times = ((parse_hhmm(d["start"]), parse_hhmm(d["end"]))
+                           if d["start"].strip() and d["end"].strip() else None)
+        self.dash_data = dashboard.DashboardData(d, Path.home() / ".cache/screenloop/dashboard.json")
+        self.dash_player = DashboardPlayer(d, cfg["web"]["port"])
+        self.dash_stopped = None  # start of a dashboard window the user pressed Stop in
+        self.dash_showing = None  # for the log: was the dashboard showing at the last look?
 
         self.lock = threading.Lock()
         self.wake = threading.Event()
@@ -475,6 +546,17 @@ class Controller:
         if not sch["enabled"]:
             return None
         return window_at(now or datetime.now(), parse_hhmm(sch["on"]), parse_hhmm(sch["off"]))
+
+    def dash_window(self, now=None):
+        """The dashboard window we're in, as (start, end), or None."""
+        if self.dash_times is None:
+            return None
+        return window_at(now or datetime.now(), *self.dash_times)
+
+    def dash_now(self, now=None):
+        """True while the dashboard, not the video, owns the screen."""
+        w = self.dash_window(now)
+        return w is not None and self.dash_stopped != w[0]
 
     def stopped_for_window(self, now=None):
         w = self.window(now)
@@ -510,6 +592,9 @@ class Controller:
     def stop(self):
         with self.lock:
             w = self.window()
+            dw = self.dash_window()
+            if dw is not None:
+                self.dash_stopped = dw[0]  # no dashboard for the rest of this window
             if w is not None:
                 # Stop lasts for the rest of today's window; the schedule returns tomorrow.
                 self.stopped_window = w[0]
@@ -644,7 +729,11 @@ class Controller:
         self.present_since = None
         self.asleep_since = now
         what = "Mac's screen went off" if trusted else f"{self.presence.host} went to sleep"
-        if self.wake_seen is not None:
+        if self.dash_now(now) and not self.manual:
+            # During the dashboard's hours the dashboard takes the screen; the video doesn't start.
+            self.wake_seen = None
+            log.info("%s; the dashboard has the screen", what)
+        elif self.wake_seen is not None:
             self.wake_seen = None
             log.info("%s went back to sleep after %s; the video carries on", self.presence.host, awake_for)
         elif self.until is not None and not self.paused:
@@ -690,10 +779,15 @@ class Controller:
             if self.window_end is not None and now >= self.window_end:
                 self.window_end = None
                 self.end_session("Daily schedule ended")
+            # During the dashboard's hours only a video started by hand may play.
+            dash = self.dash_now(now)
+            if dash and self.until is not None and not self.manual:
+                self.end_session("Dashboard")
             w = self.window(now)
             if w is not None:
                 self.window_end = w[1]
-                if self.stopped_window != w[0] and (self.until is None or self.until < w[1]):
+                if (not dash and self.stopped_window != w[0]
+                        and (self.until is None or self.until < w[1])):
                     if self.until is None:
                         self.start_session((w[1] - now).total_seconds() / 60, "Daily schedule", False)
                         if self.in_use:
@@ -707,11 +801,21 @@ class Controller:
             elif self.until is not None and not self.manual and self.quiet_now() and w is None:
                 self.end_session("Quiet hours")
             switch, self.switch_input = self.switch_input, False
-            return self.until is not None and not self.paused, switch
+            if dash and self.until is None:
+                # Shown whenever no computer is using the screen (and not before that's known).
+                showing = self.in_use is False
+                if showing != self.dash_showing:
+                    log.info("dashboard %s", "on" if showing else "waiting: a computer is using the screen")
+                self.dash_showing = showing
+                return showing, False, "dashboard"
+            if self.dash_showing is not None:
+                log.info("dashboard over")
+                self.dash_showing = None
+            return self.until is not None and not self.paused, switch, "video"
 
     def reconcile(self):
         self.update_presence()  # helper reports go stale if a Mac stops sending them
-        want_on, switch_input = self.tick()
+        want_on, switch_input, mode = self.tick()
         _, name = self.display.connector()
         connected = name is not None
         if connected != self.connected:
@@ -722,7 +826,9 @@ class Controller:
             # The monitor was switched off (or unplugged). If that lasts while the video
             # should be on screen, treat it like Stop rather than carrying on unseen.
             self.player.stop()
-            if not want_on:
+            self.dash_player.stop()
+            if not want_on or mode == "dashboard":
+                # The dashboard simply comes back with the monitor.
                 self.disconnected_since = None
             elif self.disconnected_since is None:
                 self.disconnected_since = time.monotonic()
@@ -739,6 +845,11 @@ class Controller:
                 time.sleep(2)
                 if self.wake.is_set():
                     return  # something changed meanwhile (e.g. the Mac woke); look again
+            if mode == "dashboard":
+                self.player.stop()
+                self.dash_player.start()
+                return
+            self.dash_player.stop()
             if self.player.running():
                 self.player.checkpoint()
             else:
@@ -752,6 +863,12 @@ class Controller:
             if self.display.is_on():
                 self.display.set(False)
             self.player.stop()
+            if mode == "dashboard":
+                # Keep the browser ready behind the dark screen: it takes about ten
+                # seconds to start, but shows at once when the HDMI comes back.
+                self.dash_player.start()
+            else:
+                self.dash_player.stop()
 
     def select_pi_input(self):
         """Run the optional input_command, which switches the monitor to the Pi (for manual Play)."""
@@ -783,6 +900,15 @@ class Controller:
                         "seconds_ago": round(now - h["seen"]),
                         "fresh": now - h["seen"] < self.helper_timeout}
                        for k, h in sorted(self.helpers.items())]
+            dw = self.dash_window()
+            if dw is not None and self.until is None and self.dash_stopped != dw[0]:
+                if self.in_use is False:
+                    state, summary = "dashboard", f"Dashboard until {dw[1]:%H:%M}"
+                else:
+                    state = "dashboard-waiting"
+                    summary = f"Dashboard (until {dw[1]:%H:%M}) appears when the computer's screen goes off"
+            elif dw is not None and self.until is None:
+                summary = "Off · Dashboard stopped for today"
             watched = self.helpers.get(self.watched)
             watched_helper = self.watched is not None and self.helper_known(self.watched)
             in_use = self.in_use
@@ -809,6 +935,10 @@ class Controller:
         if self.quiet:
             q = self.cfg["schedule"]
             quiet_text = f"{q['quiet_start'].strip()}–{q['quiet_end'].strip()}" + (" · now" if self.quiet_now() else "")
+        dash_text = "Off"
+        if self.dash_times:
+            d = self.cfg["dashboard"]
+            dash_text = f"{d['start'].strip()}–{d['end'].strip()} every day" + (" · now" if self.dash_window() else "")
         sch, w = dict(self.schedule), self.window()
         if not sch["enabled"]:
             sch_text = "Off"
@@ -825,6 +955,7 @@ class Controller:
             "computer": {"host": host, "present": present, "text": mac_text, "in_use": in_use},
             "helpers": {"list": helpers, "text": helper_text},
             "quiet": {"active": self.quiet_now(), "text": quiet_text},
+            "dashboard": {"active": self.dash_window() is not None, "text": dash_text},
             "schedule": {**sch, "active": w is not None, "text": sch_text},
             "keep_minutes": self.keep_minutes,
             "video": (f"{self.video.name} · {fmt_minutes(self.default_minutes)} per play"
@@ -859,6 +990,7 @@ class Controller:
             self.wake.clear()
         # On shutdown, leave the Pi's desktop visible as normal.
         self.player.stop()
+        self.dash_player.stop()
         self.display.set(True)
 
 
@@ -884,6 +1016,14 @@ def make_handler(ctrl):
                 self.send(200, page, "text/html; charset=utf-8")
             elif path == "/api/status":
                 self.send(200, json.dumps(ctrl.status()), "application/json")
+            elif path == "/dashboard":
+                try:
+                    page = (Path(__file__).resolve().parent / "dashboard.html").read_text()
+                except OSError:
+                    return self.send(500, "dashboard.html is missing; run install.sh again\n", "text/plain")
+                self.send(200, page, "text/html; charset=utf-8")
+            elif path == "/api/dashboard":
+                self.send(200, json.dumps(ctrl.dash_data.snapshot()), "application/json")
             elif path == "/api/log":
                 self.send(200, "\n".join(recent_log.lines) + "\n", "text/plain; charset=utf-8")
             else:
@@ -1019,6 +1159,7 @@ dt { color:var(--muted); } dd { margin:0; }
     <dt>Computer</dt><dd id="mac">…</dd>
     <dt>Mac helpers</dt><dd id="helpers">…</dd>
     <dt>Quiet hours</dt><dd id="quiet">…</dd>
+    <dt>Dashboard</dt><dd id="dash">…</dd>
     <dt>Video</dt><dd id="video">…</dd>
   </dl>
 </main>
@@ -1032,6 +1173,7 @@ async function refresh() {
     document.getElementById('mac').textContent = s.computer.text;
     document.getElementById('helpers').textContent = s.helpers.text;
     document.getElementById('quiet').textContent = s.quiet.text;
+    document.getElementById('dash').textContent = s.dashboard.text;
     document.getElementById('video').textContent = s.video;
     const f = s.playback, pause = document.getElementById('pause'), sound = document.getElementById('sound');
     pause.disabled = sound.disabled = !f.on_screen;

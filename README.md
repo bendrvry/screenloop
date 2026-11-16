@@ -11,6 +11,14 @@ computer, the Pi cuts its HDMI signal within about a second and the monitor
 switches back. After a set time the Pi stops sending a signal altogether, so
 the monitor can go to sleep. A small web page lets you control it from a phone.
 
+Optionally, at set hours (say 06:00 to 08:30), a [dashboard](#dashboard) takes
+the video's place: the time, the weather, news headlines, sunrise or sunset,
+and the moon. It follows the same rules, so it appears when your computer
+sleeps and gets out of the way when it wakes.
+
+![The dashboard on an ultrawide monitor: weather on the left, the clock and today's
+conditions in the middle, headlines on the right](docs/dashboard.png)
+
 ## The problem
 
 A monitor with automatic input switching shows whichever input has a signal,
@@ -74,6 +82,8 @@ There are two ways for the Pi to know the computer is in use:
   computer on another.
 - A video file in **H.264, 1080p or smaller**.
 - `mpv`, `ffmpeg` and `wlr-randr` (`sudo apt install mpv ffmpeg wlr-randr`).
+- For the dashboard only: Chromium, which Raspberry Pi OS with the desktop
+  already includes.
 
 ## Install
 
@@ -126,6 +136,63 @@ Open `http://raspberrypi.local:8080` on your phone.
 
 The page has no password, so anyone on your network can use it.
 
+## Dashboard
+
+Off until you set its hours. In `~/.config/screenloop/screenloop.ini`:
+
+```ini
+[dashboard]
+start = 06:00
+end = 08:30
+place = London
+latitude = 51.5074
+longitude = -0.1278
+news_feeds = https://feeds.bbci.co.uk/news/rss.xml
+```
+
+Then `systemctl --user restart screenloop`. Between `start` and `end`, the
+video gives way to the dashboard, a web page the Pi serves at
+`http://raspberrypi.local:8080/dashboard` and shows in Chromium, full screen.
+Outside those hours nothing changes.
+
+- It shows whenever no computer is using the screen, by the same rules as the
+  video: the Mac helper or pings. If a computer's screen is on, the dashboard
+  waits and appears when that screen goes off.
+- The video doesn't start on its own during these hours, and quiet hours and
+  the daily schedule don't apply. **Play** on the control page still plays it.
+- **Stop** switches the dashboard off for the rest of that day's window.
+- At the end time the Pi's HDMI goes off, and the usual rules take over.
+- The browser is kept running behind the dark screen during the window, so
+  the dashboard appears at once instead of after Chromium's ten-second start.
+- Windows can run past midnight, like the daily schedule.
+
+What's on it, and where it comes from:
+
+| Panel | Source |
+|---|---|
+| Current weather, the next 16 hours, 7 days, feels like, rain, wind, UV, humidity, daylight | [Open-Meteo](https://open-meteo.com) for `latitude` / `longitude`, every 15 minutes, no account needed |
+| Headlines: the newest story with a short summary, four more, and four in brief | Any RSS or Atom feeds in `news_feeds` (space separated), merged newest first, every 10 minutes |
+| Sunrise or sunset | Open-Meteo |
+| Moon phase and the next quarter | Worked out on the Pi (the phase can be off by a few hours) |
+
+Each source is saved in `~/.cache/screenloop/dashboard.json`. If a fetch
+fails, the last good data stays up. Data is only fetched while the page is
+open.
+
+The sky behind the glass cards follows the real sunrise and sunset: night
+until about 50 minutes before sunrise, dawn around it, full daylight about
+75 minutes after, and back again at dusk. The layout is drawn for a 2.4:1
+ultrawide and stretches to fill anything down to 16:10
+([16:9 example](docs/dashboard-16x9.png)).
+
+Other settings: `temperature_unit` (`celsius` or `fahrenheit`), `wind_unit`
+(`mph`, `kmh`, `ms` or `kn`), `news_title`, and `effects = lite` to drop the
+live blur if the Pi can't draw it smoothly.
+
+To check the page at another time of day, open
+`http://raspberrypi.local:8080/dashboard?at=07:12`. Add `&effects=lite` to see
+it without the blur.
+
 ### API
 
 Every button is also an HTTP endpoint, for example for an iPhone Shortcut
@@ -142,6 +209,8 @@ Every button is also an HTTP endpoint, for example for an iPhone Shortcut
 | `POST /api/schedule?enabled=yes&on=07:00&off=18:00` | Change the daily schedule (any of the three) |
 | `GET /api/status` | The current state as JSON |
 | `GET /api/log` | The last 1,000 log lines |
+| `GET /dashboard` | The dashboard page |
+| `GET /api/dashboard` | The dashboard's data as JSON |
 | `POST /api/mac?name=…&screen=on\|off` | What the Mac helper calls |
 
 Pause and sound reply with 409 if the video isn't on screen.
@@ -162,6 +231,7 @@ The main ones:
 | `resolution` | The display mode, or `auto` for the monitor's preferred one |
 | `input_command` | Optional command that switches the monitor to the Pi when you press Play (for example with `ddcutil`) |
 | `mpv_args` | Extra options for mpv |
+| `[dashboard]` | The dashboard's hours, place, units and news feeds (see [Dashboard](#dashboard)) |
 
 ## Notes from the build
 
@@ -184,8 +254,8 @@ The main ones:
 
 ## Tests
 
-The time windows, the ping logic and the session rules are tested without a
-Pi:
+The time windows, the ping logic, the session rules and the dashboard's feed
+parsing are tested without a Pi:
 
 ```bash
 python3 -m unittest discover tests

@@ -256,5 +256,49 @@ class DailySchedule(ControllerCase):
         self.assertTrue(self.playing())
 
 
+
+class Dashboard(ControllerCase):
+    def set_window(self, before, after):
+        now = datetime.now()
+        self.c.dash_times = (s.parse_hhmm((now - timedelta(minutes=before)).strftime("%H:%M")),
+                             s.parse_hhmm((now + timedelta(minutes=after)).strftime("%H:%M")))
+
+    def test_off_by_default(self):
+        self.assertIsNone(self.c.dash_times)
+        self.assertEqual(self.c.tick()[2], "video")
+
+    def test_shows_when_no_computer_is_using_the_screen(self):
+        self.set_window(30, 60)
+        self.c.on_helper("Office-Mac", False)
+        self.assertEqual(self.c.tick(), (True, False, "dashboard"))
+        self.assertEqual(self.c.status()["state"], "dashboard")
+
+    def test_waits_while_the_computer_is_in_use(self):
+        self.set_window(30, 60)
+        self.c.on_helper("Office-Mac", True)
+        self.assertEqual(self.c.tick(), (False, False, "dashboard"))
+        self.assertEqual(self.c.status()["state"], "dashboard-waiting")
+
+    def test_the_video_does_not_start_on_its_own(self):
+        self.set_window(30, 60)
+        self.c.on_helper("Office-Mac", True)
+        self.c.on_helper("Office-Mac", False)
+        self.assertIsNone(self.c.until)
+        self.assertEqual(self.c.tick()[2], "dashboard")
+
+    def test_play_still_plays_the_video(self):
+        self.set_window(30, 60)
+        self.c.on_helper("Office-Mac", False)
+        self.c.play(60)
+        self.assertEqual(self.c.tick()[0::2], (True, "video"))
+
+    def test_stop_lasts_for_the_rest_of_the_window(self):
+        self.set_window(30, 60)
+        self.c.on_helper("Office-Mac", False)
+        self.c.stop()
+        self.assertEqual(self.c.tick()[0::2], (False, "video"))
+        self.assertIn("stopped for today", self.c.status()["summary"])
+
+
 if __name__ == "__main__":
     unittest.main()

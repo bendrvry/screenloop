@@ -8,6 +8,8 @@ for tool in mpv ffprobe wlr-randr; do
 done
 
 install -Dm755 "$here/screenloop.py" ~/.local/share/screenloop/screenloop.py
+install -Dm644 "$here/dashboard.py" ~/.local/share/screenloop/dashboard.py
+install -Dm644 "$here/dashboard.html" ~/.local/share/screenloop/dashboard.html
 if [[ -e ~/.config/screenloop/screenloop.ini ]]; then
     echo "Keeping your existing ~/.config/screenloop/screenloop.ini"
 else

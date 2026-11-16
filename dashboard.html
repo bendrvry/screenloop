@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>screenloop dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Nunito:wght@600;700&display=swap">
+<style>
+/* Laid out 1920 wide and scaled to the screen. The height follows the screen's shape,
+   from 800 (an ultrawide 2.4:1) to 1200 (16:10), so the cards fill it. */
+html, body { margin: 0; height: 100%; background: #03041a; overflow: hidden; cursor: none; }
+#stage { --ps: paused; --dl: 0s; width: 1920px; height: 800px; position: absolute; left: 0; top: 0; transform-origin: 0 0;
+  overflow: hidden; color: #fff; font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Inter, sans-serif;
+  font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased;
+  background: linear-gradient(180deg, #03041a 0%, #0a0d30 34%, #1b1846 62%, #33234f 84%, #4a2c52 100%); }
+/* The sky runs from night (0%) to day (100%); script sets how far along it is. */
+.anim { animation-duration: 1000s; animation-timing-function: linear; animation-fill-mode: both;
+  animation-play-state: var(--ps); animation-delay: var(--dl); }
+@keyframes dawn { 0% { opacity: 0 } 45% { opacity: 1 } 100% { opacity: .2 } }
+@keyframes day { 0% { opacity: 0 } 40% { opacity: 0 } 100% { opacity: 1 } }
+@keyframes stars { 0% { opacity: .9 } 35% { opacity: 0 } 100% { opacity: 0 } }
+@keyframes sun { 0% { transform: translateY(320px); opacity: .15 } 50% { transform: translateY(70px); opacity: 1 } 100% { transform: translateY(-230px); opacity: .85 } }
+@keyframes hills { 0% { filter: brightness(.5) saturate(.8) } 50% { filter: brightness(1) saturate(1.05) } 100% { filter: brightness(1.75) saturate(.9) } }
+@keyframes tint { 0% { background-color: rgba(16,18,40,.16) } 50% { background-color: rgba(22,20,44,.26) } 100% { background-color: rgba(18,34,66,.4) } }
+@keyframes tint-lite { 0% { background-color: rgba(30,32,62,.5) } 50% { background-color: rgba(52,40,78,.5) } 100% { background-color: rgba(30,56,100,.56) } }
+.layer { position: absolute; inset: 0; }
+#stars { animation-name: stars; background-image: radial-gradient(1.5px 1.5px at 8% 12%, #fff, transparent), radial-gradient(1px 1px at 19% 30%, #fff, transparent), radial-gradient(1.5px 1.5px at 33% 9%, #fff, transparent), radial-gradient(1px 1px at 46% 22%, #fff, transparent), radial-gradient(1.5px 1.5px at 58% 7%, #fff, transparent), radial-gradient(1px 1px at 67% 28%, #fff, transparent), radial-gradient(1.5px 1.5px at 79% 14%, #fff, transparent), radial-gradient(1px 1px at 91% 24%, #fff, transparent), radial-gradient(1px 1px at 26% 44%, #fff, transparent), radial-gradient(1px 1px at 73% 41%, #fff, transparent); }
+#dawn { animation-name: dawn; background: linear-gradient(180deg, #131542 0%, #3a2a6e 30%, #86477a 55%, #d2705f 76%, #f2a45e 90%, #f8cf8a 100%); }
+#day { animation-name: day; background: linear-gradient(180deg, #3f83cf 0%, #6fa8e2 38%, #a9cdee 68%, #e6e3d6 90%, #f6e6c4 100%); }
+#sun { position: absolute; left: 640px; bottom: -380px; width: 880px; height: 880px; border-radius: 50%; animation-name: sun;
+  background: radial-gradient(circle, rgba(255,244,214,1) 0%, rgba(255,222,160,.9) 7%, rgba(255,190,120,.42) 26%, rgba(255,160,110,0) 62%); }
+#hills { width: 100%; height: 100%; animation-name: hills; }
+
+.glass { position: relative; box-sizing: border-box; border-radius: 40px; background-color: rgba(16,18,40,.2); animation-name: tint;
+  backdrop-filter: blur(30px) saturate(185%); -webkit-backdrop-filter: blur(30px) saturate(185%);
+  box-shadow: inset 0 0 44px rgba(255,255,255,.045), inset 0 1px 1px rgba(255,255,255,.22), 0 30px 80px rgba(4,6,20,.28), 0 2px 8px rgba(4,6,20,.14); }
+.glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.25px; pointer-events: none;
+  background: linear-gradient(140deg, rgba(255,255,255,.75) 0%, rgba(255,255,255,.14) 28%, rgba(255,255,255,.05) 62%, rgba(255,255,255,.42) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+/* effects = lite: no live blur, for a Pi that can't keep up with it. */
+.lite .glass { backdrop-filter: none; -webkit-backdrop-filter: none; animation-name: tint-lite; }
+.tile { border-radius: 32px; padding: 22px 24px; display: flex; flex-direction: column; justify-content: space-between; }
+.label { font-size: 14px; font-weight: 600; color: rgba(255,255,255,.72); }
+.dim { color: rgba(255,255,255,.8); }
+.hair { height: 1px; background: rgba(255,255,255,.12); }
+.big { font-size: 44px; font-weight: 500; line-height: 1; letter-spacing: -0.03em; }
+.sub { font-size: 16px; font-weight: 500; color: rgba(255,255,255,.8); margin-top: 3px; }
+
+#grid { position: absolute; inset: 0; box-sizing: border-box; padding: 40px 44px; display: grid;
+  grid-template-columns: 520px 420px minmax(0, 1fr); gap: 32px; }
+#weather { padding: 32px 34px; display: flex; flex-direction: column; gap: 22px; }
+#w-top { display: flex; justify-content: space-between; align-items: flex-start; }
+#place { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+#temp { font-size: 112px; font-weight: 300; line-height: 1.02; letter-spacing: -0.05em; }
+#w-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding-top: 8px; }
+#cond { font-size: 19px; font-weight: 600; }
+#hilo { font-size: 18px; font-weight: 500; }
+#hours { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; }
+.hour { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.hour .t { font-size: 15px; font-weight: 600; color: rgba(255,255,255,.8); }
+.hour .d { font-size: 19px; font-weight: 600; }
+#days { display: flex; flex-direction: column; justify-content: space-between; flex-grow: 1; }
+.dayrow { display: grid; grid-template-columns: 66px 30px 36px minmax(0, 1fr) 36px; align-items: center; gap: 12px; font-size: 19px; }
+.dayrow .n, .dayrow .hi { font-weight: 600; }
+.dayrow .lo { text-align: right; font-weight: 500; color: rgba(255,255,255,.66); }
+.dayrow .hi { text-align: right; }
+.track { height: 5px; border-radius: 3px; background: rgba(0,0,0,.2); position: relative; }
+.track div { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: linear-gradient(90deg, #7cc4ff, #ffc56e); }
+
+#middle { display: flex; flex-direction: column; gap: 24px; min-height: 0; }
+#clockbox { display: flex; flex-direction: column; align-items: center; justify-content: center; flex-grow: 1; min-height: 0; text-align: center; }
+#date { font-size: 25px; font-weight: 600; letter-spacing: -0.01em; color: rgba(255,255,255,.9); }
+#clock { font-family: ui-rounded, 'SF Pro Rounded', Nunito, -apple-system, Inter, sans-serif; font-size: 154px; font-weight: 600;
+  line-height: 1.02; letter-spacing: -0.035em; color: rgba(255,255,255,.94); text-shadow: 0 2px 30px rgba(10,12,40,.25); }
+#today { padding: 26px 28px; display: flex; flex-direction: column; gap: 18px; }
+#stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 24px; }
+.stat .v { font-size: 30px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.15; }
+#tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; height: 156px; }
+#moonrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+#moon-art { margin: -4px -4px 0 0; }
+.sub { white-space: nowrap; }
+
+#news { padding: 34px 40px; display: flex; flex-direction: column; gap: 24px; min-width: 0; overflow: hidden; }
+#n-head { display: flex; justify-content: space-between; align-items: baseline; }
+#n-title { font-size: 30px; font-weight: 700; letter-spacing: -0.025em; }
+#n-meta { font-size: 16px; font-weight: 500; color: rgba(255,255,255,.72); }
+#lead { display: flex; flex-direction: column; gap: 10px; }
+#lead .label { color: #ffd9a0; }
+#lead-h { font-size: 38px; font-weight: 700; line-height: 1.1; letter-spacing: -0.028em; }
+#lead-s { font-size: 19px; line-height: 1.42; color: rgba(255,255,255,.8); }
+#briefs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 40px; }
+.brief { display: flex; flex-direction: column; gap: 5px; }
+.brief .h { font-size: 21px; font-weight: 600; line-height: 1.22; letter-spacing: -0.012em; }
+#noted { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 40px; font-size: 17px; line-height: 1.3; color: rgba(255,255,255,.8); }
+#n-empty { font-size: 20px; color: rgba(255,255,255,.8); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="stars" class="layer anim"></div>
+  <div id="dawn" class="layer anim"></div>
+  <div id="day" class="layer anim"></div>
+  <div id="sun" class="anim"></div>
+  <svg id="hills" class="layer anim" viewBox="0 0 1920 800" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="h1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6b6a9a"/><stop offset="1" stop-color="#8a7fa8"/></linearGradient>
+      <linearGradient id="h2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4d4f80"/><stop offset="1" stop-color="#6c6593"/></linearGradient>
+      <linearGradient id="h3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34365f"/><stop offset="1" stop-color="#4b4674"/></linearGradient>
+      <linearGradient id="h4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#20223f"/><stop offset="1" stop-color="#2c2a4c"/></linearGradient>
+    </defs>
+    <path d="M0 560 C180 520 330 548 520 524 C760 494 900 546 1120 516 C1360 484 1560 540 1920 500 L1920 800 L0 800 Z" fill="url(#h1)" opacity=".55"/>
+    <path d="M0 620 C220 574 400 618 640 588 C880 558 1060 622 1300 590 C1540 558 1740 606 1920 578 L1920 800 L0 800 Z" fill="url(#h2)" opacity=".8"/>
+    <path d="M0 684 C200 646 380 690 620 660 C860 630 1040 700 1300 668 C1540 636 1740 692 1920 654 L1920 800 L0 800 Z" fill="url(#h3)"/>
+    <path d="M0 752 C260 716 520 770 800 738 C1100 706 1400 776 1920 730 L1920 800 L0 800 Z" fill="url(#h4)"/>
+  </svg>
+
+  <div id="grid">
+    <section id="weather" class="glass anim">
+      <div id="w-top">
+        <div><div id="place"></div><div id="temp">–</div></div>
+        <div id="w-side"><div id="cond-icon"></div><div id="cond"></div><div id="hilo" class="dim"></div></div>
+      </div>
+      <div class="hair"></div>
+      <div id="hours"></div>
+      <div class="hair"></div>
+      <div id="days"></div>
+    </section>
+
+    <div id="middle">
+      <div id="clockbox"><div id="date"></div><div id="clock"></div></div>
+      <section id="today" class="glass anim">
+        <div class="label">Today</div>
+        <div id="stats"></div>
+      </section>
+      <div id="tiles">
+        <section class="glass tile anim"><div class="label" id="sun-label">Sunrise</div><div><div class="big" id="sun-big">–</div><div class="sub" id="sun-sub"></div></div></section>
+        <section class="glass tile anim"><div id="moonrow"><div class="label" id="moon-name">Moon</div><div id="moon-art"></div></div>
+          <div><div class="big" id="moon-lit">–</div><div class="sub" id="moon-next"></div></div>
+        </section>
+      </div>
+    </div>
+
+    <section id="news" class="glass anim">
+      <div id="n-head"><div id="n-title">Headlines</div><div id="n-meta"></div></div>
+      <div id="n-empty" hidden></div>
+      <div id="n-body">
+        <div id="lead"><div class="label" id="lead-p"></div><div id="lead-h"></div><div id="lead-s"></div></div>
+        <div class="hair" style="margin: 24px 0"></div>
+        <div id="briefs"></div>
+        <div class="hair" style="margin: 24px 0"></div>
+        <div id="noted"></div>
+      </div>
+    </section>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const stage = $('stage');
+const params = new URLSearchParams(location.search);
+
+function fit() {
+  const h = Math.round(Math.max(800, Math.min(1200, 1920 * innerHeight / innerWidth)));
+  stage.style.height = `${h}px`;
+  const s = Math.min(innerWidth / 1920, innerHeight / h);
+  stage.style.transform = `translate(${(innerWidth - 1920 * s) / 2}px, ${(innerHeight - h * s) / 2}px) scale(${s})`;
+}
+addEventListener('resize', fit);
+fit();
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const deg = (n) => `${Math.round(n)}°`;
+const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+// WMO weather codes -> a name and one of a few icons.
+function describe(code, day) {
+  if (code === 0) return ['Clear', day ? 'sun' : 'moon'];
+  if (code === 1) return ['Mostly Clear', day ? 'sun' : 'moon'];
+  if (code === 2) return ['Partly Cloudy', day ? 'partly' : 'cloud'];
+  if (code === 3) return ['Cloudy', 'cloud'];
+  if (code === 45 || code === 48) return ['Fog', 'cloud'];
+  if (code >= 51 && code <= 57) return ['Drizzle', 'rain'];
+  if (code >= 61 && code <= 67) return ['Rain', 'rain'];
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return ['Snow', 'snow'];
+  if (code >= 80 && code <= 82) return ['Showers', 'rain'];
+  if (code >= 95) return ['Thunderstorms', 'storm'];
+  return ['Cloudy', 'cloud'];
+}
+const CLOUD = 'M6.5 15.5h10.8a4.4 4.4 0 0 0 .5-8.8A6.2 6.2 0 0 0 6.1 8.4a3.6 3.6 0 0 0 .4 7.1z';
+const ICONS = {
+  sun: '<circle cx="12" cy="12" r="5.4" fill="#ffd34d"/>',
+  moon: '<path d="M16.5 14.8A6.6 6.6 0 0 1 9.2 5.5a6.8 6.8 0 1 0 7.3 9.3z" fill="#f6f1e4"/>',
+  partly: '<circle cx="8.5" cy="8" r="4" fill="#ffd34d"/><path d="M8 19.5h9.2a4.2 4.2 0 0 0 .5-8.4 5.6 5.6 0 0 0-10.6 1.5A3.5 3.5 0 0 0 8 19.5z" fill="#fff"/>',
+  cloud: `<path d="${CLOUD}" fill="#fff" transform="translate(0 1.5)"/>`,
+  rain: `<path d="${CLOUD}" fill="#fff" transform="translate(0 -1.5)"/><path d="M8.5 16.5l-1 3.2M12.5 16.5l-1 3.2M16.5 16.5l-1 3.2" stroke="#7cc4ff" stroke-width="1.8" stroke-linecap="round"/>`,
+  snow: `<path d="${CLOUD}" fill="#fff" transform="translate(0 -1.5)"/><circle cx="8" cy="18.6" r="1.2" fill="#dff1ff"/><circle cx="12" cy="18.6" r="1.2" fill="#dff1ff"/><circle cx="16" cy="18.6" r="1.2" fill="#dff1ff"/>`,
+  storm: `<path d="${CLOUD}" fill="#fff" transform="translate(0 -1.5)"/><path d="M12.6 15.6l-2.6 3.4h2.4l-1.2 3 3.4-4h-2.4l1.4-2.4z" fill="#ffd34d"/>`,
+};
+const icon = (name, size = 24) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${ICONS[name]}</svg>`;
+
+function moonArt(lit, waxing) {
+  const r = 26, rx = (r * Math.abs(1 - 2 * lit)).toFixed(2), sweep = lit < 0.5 ? 0 : 1;
+  const flip = waxing ? '' : ' transform="translate(60 0) scale(-1 1)"';
+  return `<svg viewBox="0 0 60 60" width="46" height="46" role="img" aria-label="Moon phase">` +
+    `<circle cx="30" cy="30" r="${r}" fill="rgba(0,0,0,.22)"/>` +
+    `<path d="M30 4 A${r} ${r} 0 0 1 30 56 A${rx} ${r} 0 0 ${sweep} 30 4 Z" fill="#f6f1e4"${flip}/></svg>`;
+}
+
+let data = null;
+// ?at=07:12 pretends it's that time today, to check the page at any hour.
+function now() {
+  const d = new Date();
+  const at = params.get('at');
+  if (at) { const [h, m] = at.split(':').map(Number); d.setHours(h, m, 0, 0); }
+  return d;
+}
+const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+function renderClock() {
+  const d = now();
+  $('clock').textContent = hhmm(d);
+  $('date').textContent = d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+function renderSky() {
+  // 0 = night, 1 = full daylight. Dawn peaks a few minutes after sunrise.
+  let p = 1;
+  const today = data && data.weather && data.weather.days.find((x) => x.date === localDate(now()));
+  if (today) {
+    const sunrise = new Date(today.sunrise), sunset = new Date(today.sunset), t = now();
+    p = (t - (sunrise - 50 * 60000)) / (125 * 60000);
+    if (t > sunset - 75 * 60000) p = (sunset - -50 * 60000 - t) / (125 * 60000);  // and back down at dusk
+  }
+  p = Math.max(0, Math.min(0.999, p));
+  stage.style.setProperty('--dl', `${-(p * 1000).toFixed(1)}s`);
+}
+
+function renderWeather() {
+  const w = data.weather;
+  $('place').textContent = data.place;
+  if (!w) { $('cond').textContent = 'Weather not loaded yet'; return; }
+  const t = now(), todayKey = localDate(t);
+  const days = w.days.filter((x) => x.date >= todayKey).slice(0, 7);
+  const today = days[0] || w.days[0];
+  const [name, ic] = describe(w.current.code, w.current.day);
+  $('temp').textContent = deg(w.current.temp);
+  $('cond-icon').innerHTML = icon(ic, 44);
+  $('cond').textContent = name;
+  $('hilo').textContent = `H:${deg(today.hi)}  L:${deg(today.lo)}`;
+
+  const hourKey = `${todayKey}T${String(t.getHours()).padStart(2, '0')}`;
+  const upcoming = w.hours.filter((x) => x.time.slice(0, 13) >= hourKey);
+  const hours = $('hours');
+  hours.replaceChildren();
+  for (let i = 0; i < 8; i++) {
+    const x = upcoming[i * 2];
+    if (!x) break;
+    const box = el('div', 'hour');
+    box.append(el('div', 't', i === 0 ? 'Now' : x.time.slice(11, 13)));
+    const pic = el('div'); pic.innerHTML = icon(describe(x.code, x.day)[1]); box.append(pic);
+    box.append(el('div', 'd', deg(i === 0 ? w.current.temp : x.temp)));
+    hours.append(box);
+  }
+
+  const lo = Math.min(...days.map((x) => x.lo)), hi = Math.max(...days.map((x) => x.hi)), span = Math.max(1, hi - lo);
+  const list = $('days');
+  list.replaceChildren();
+  days.forEach((x, i) => {
+    const row = el('div', 'dayrow');
+    const name = i === 0 ? 'Today' : new Date(x.date + 'T12:00').toLocaleDateString(undefined, { weekday: 'short' });
+    row.append(el('div', 'n', name));
+    const pic = el('div'); pic.style.display = 'flex'; pic.innerHTML = icon(describe(x.code, true)[1]); row.append(pic);
+    row.append(el('div', 'lo', deg(x.lo)));
+    const track = el('div', 'track'), bar = el('div');
+    bar.style.left = `${(x.lo - lo) / span * 100}%`;
+    bar.style.right = `${(hi - x.hi) / span * 100}%`;
+    track.append(bar); row.append(track);
+    row.append(el('div', 'hi', deg(x.hi)));
+    list.append(row);
+  });
+
+  const sunrise = new Date(today.sunrise), sunset = new Date(today.sunset);
+  const light = Math.round((sunset - sunrise) / 60000);
+  const stats = [
+    ['Feels like', deg(w.current.feels)],
+    ['Chance of rain', today.rain == null ? '–' : `${Math.round(today.rain)}%`],
+    ['Wind', `${Math.round(w.current.wind)} ${data.units.wind}`],
+    ['UV index', today.uv == null ? '–' : String(Math.round(today.uv))],
+    ['Humidity', `${Math.round(w.current.humidity)}%`],
+    ['Daylight', `${Math.floor(light / 60)} h ${light % 60} min`],
+  ];
+  const grid = $('stats');
+  grid.replaceChildren();
+  for (const [label, value] of stats) {
+    const s = el('div', 'stat');
+    s.append(el('div', 'label', label), el('div', 'v', value));
+    grid.append(s);
+  }
+
+  // Before sunrise: sunrise is the headline. Once the sun is up: sunset, with sunrise below.
+  if (t < sunrise) {
+    $('sun-label').textContent = 'Sunrise'; $('sun-big').textContent = hhmm(sunrise); $('sun-sub').textContent = `Sunset: ${hhmm(sunset)}`;
+  } else if (t < sunset || !days[1]) {
+    $('sun-label').textContent = 'Sunset'; $('sun-big').textContent = hhmm(sunset); $('sun-sub').textContent = `Sunrise: ${hhmm(sunrise)}`;
+  } else {
+    $('sun-label').textContent = 'Sunrise'; $('sun-big').textContent = hhmm(new Date(days[1].sunrise)); $('sun-sub').textContent = 'Tomorrow';
+  }
+}
+
+function renderMoon() {
+  const m = data.moon;
+  $('moon-name').textContent = m.name;
+  $('moon-lit').textContent = `${Math.round(m.lit * 100)}%`;
+  const days = Math.round(m.next_days);
+  const on = new Date(now().getTime() + m.next_days * 86400000);
+  const when = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : on.toLocaleDateString(undefined, { weekday: 'short' });
+  $('moon-next').textContent = `${m.next} ${when}`;
+  $('moon-art').innerHTML = moonArt(m.lit, m.waxing);
+}
+
+function ago(seconds) {
+  if (!seconds) return '';
+  const mins = Math.round((now().getTime() / 1000 - seconds) / 60);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 24 * 60) return `${Math.round(mins / 60)} h ago`;
+  return new Date(seconds * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+}
+const byline = (item) => [item.publisher, ago(item.published)].filter(Boolean).join('  ·  ');
+
+function renderNews() {
+  const n = data.news;
+  $('n-title').textContent = data.news_title;
+  $('n-body').hidden = !n;
+  $('n-empty').hidden = !!n;
+  if (!n) {
+    $('n-meta').textContent = '';
+    $('n-empty').textContent = data.news_configured
+      ? 'Waiting for the news…'
+      : 'Add an RSS or Atom feed (news_feeds) to screenloop.ini to show headlines here.';
+    return;
+  }
+  $('n-meta').textContent = n.fetched ? `Updated ${hhmm(new Date(n.fetched * 1000))}` : '';
+  $('lead-p').textContent = byline(n.lead);
+  $('lead-h').textContent = n.lead.headline;
+  $('lead-s').textContent = n.lead.summary;
+  const briefs = $('briefs');
+  briefs.replaceChildren();
+  for (const b of n.briefs) {
+    const box = el('div', 'brief');
+    box.append(el('div', 'label', byline(b)), el('div', 'h', b.headline));
+    briefs.append(box);
+  }
+  const noted = $('noted');
+  noted.replaceChildren();
+  for (const h of n.noted) noted.append(el('div', '', h));
+}
+
+function render() {
+  renderClock();
+  if (!data) return;
+  stage.classList.toggle('lite', (params.get('effects') || data.effects) === 'lite');
+  renderSky(); renderWeather(); renderMoon(); renderNews();
+}
+
+async function load() {
+  try {
+    data = await (await fetch('/api/dashboard', { cache: 'no-store' })).json();
+  } catch (e) { /* keep showing what we have */ }
+  render();
+}
+
+load();
+setInterval(load, 60000);
+// New data arrives within seconds of the first request; pick it up quickly at the start.
+setTimeout(load, 5000); setTimeout(load, 15000);
+let lastMinute = -1;
+setInterval(() => { const m = new Date().getMinutes(); if (m !== lastMinute) { lastMinute = m; render(); } }, 1000);
+</script>
+</body>
+</html>
